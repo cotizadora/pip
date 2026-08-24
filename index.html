@@ -50,8 +50,8 @@
        OJO con la curva: el primer valor debe ser MENOR que el tercero
        (.35 < .65). Si se cruzan, la hoja pega un acelerón seco en la mitad
        y se siente rígida por mucho que se alargue la duración. */
-    --flip-duration:  1800ms;
-    --flip-ease:      cubic-bezier(.35,.05,.65,1);
+    --flip-duration:  2400ms;
+    --flip-ease:      cubic-bezier(.28,.06,.55,1);
     --page-radius:    16px;
     --ui: "Segoe UI Rounded","Segoe UI",-apple-system,"SF Pro Rounded",
           "Nunito","Quicksand",system-ui,sans-serif;
@@ -153,22 +153,30 @@
   #flipper .front{ z-index:2; }
   #flipper .back{
     transform:rotateY(180deg);
-    background:linear-gradient(115deg, var(--paper) 0%, #F3E9D6 100%);
+    background:linear-gradient(115deg, var(--paper) 0%, #F6EFE1 100%);
   }
   #flipper .face img{
     width:100%; height:100%; object-fit:contain; display:block;
     background:var(--paper); pointer-events:none;
   }
+  /* HOJA DELGADA: por el reverso se transparenta apenas lo impreso del otro
+     lado, espejado. Es el detalle que hace leer la página como papel fino
+     y no como un cartón rígido. */
+  #flipper .back img{
+    opacity:.12; transform:scaleX(-1); background:transparent;
+  }
+  /* Sombra del pliegue: suave y difusa, insinúa que la hoja se arquea */
   #flipper .shade{
     position:absolute; inset:0; border-radius:var(--page-radius);
-    background:linear-gradient(90deg, rgba(40,26,8,.26), rgba(40,26,8,0) 52%);
+    background:linear-gradient(90deg, rgba(40,26,8,.16), rgba(40,26,8,.04) 38%, rgba(40,26,8,0) 68%);
     opacity:0; transition:opacity var(--flip-duration) var(--flip-ease);
     pointer-events:none;
   }
+  /* Brillo tenue y ancho en el borde libre: lectura de hoja curvada, no plana */
   #flipper .curl{
     position:absolute; inset:0; border-radius:var(--page-radius);
-    background:linear-gradient(90deg, rgba(255,255,255,0) 72%, rgba(255,255,255,.5) 100%);
-    opacity:0; transition:opacity calc(var(--flip-duration) * .55) var(--flip-ease);
+    background:linear-gradient(90deg, rgba(255,255,255,0) 55%, rgba(255,255,255,.32) 88%, rgba(255,255,255,.1) 100%);
+    opacity:0; transition:opacity calc(var(--flip-duration) * .6) var(--flip-ease);
     pointer-events:none; mix-blend-mode:soft-light;
   }
 
@@ -509,7 +517,7 @@
     imgUnder.src = imgSrc(target);
     pageUnder.style.display = "block";
     imgFront.src = (dir === "next") ? imgSrc(current) : imgSrc(target);
-    imgBack.src  = "";
+    imgBack.src  = imgFront.src;   // se transparenta tenue por el reverso
 
     flipper.style.transition = "none";
     shade.style.transition = curl.style.transition = turnShadow.style.transition = "none";
