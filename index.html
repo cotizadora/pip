@@ -355,6 +355,7 @@
 <!-- Barra inferior -->
 <div id="bottombar">
   <button class="ctrl" id="btnAudio" title="Controles de sonido" aria-label="Controles de sonido">🎚️</button>
+  <button class="ctrl" id="btnAuto" title="Escuchar el cuento solo (pasa las hojas automáticamente)" aria-label="Reproducción automática">▶</button>
   <div id="counter">Portada</div>
   <button class="ctrl" id="btnFull" title="Pantalla completa" aria-label="Pantalla completa">⛶</button>
 </div>
@@ -387,6 +388,7 @@
   const MUSIC_DEF   = 14;        // volumen música por defecto (0..100)  ~ambiente muy bajo
   const MUSIC_MAX   = 0.32;      // tope real de la música (para que nunca tape la voz)
   const DUCK_RATIO  = 0.22;      // durante un diálogo, la música baja a este % de su valor
+  const AUTO_GAP    = 2200;      // pausa tras la narración antes de pasar sola (ms)
 
   const pad = n => String(n).padStart(2, "0");
   const imgSrc = n => pad(n) + ".png";                 // 00.png .. 12.png
@@ -402,7 +404,7 @@
   const pageUnder=$("pageUnder"), counter=$("counter"), speaker=$("speaker");
   const arrowBack=$("arrowBack"), arrowNext=$("arrowNext"),
         zoneBack=$("zoneBack"), zoneNext=$("zoneNext");
-  const btnFull=$("btnFull"), btnAudio=$("btnAudio"), audioPanel=$("audioPanel");
+  const btnFull=$("btnFull"), btnAudio=$("btnAudio"), audioPanel=$("audioPanel"), btnAuto=$("btnAuto");
   const startGate=$("startGate"), startBtn=$("startBtn");
   const tgDialog=$("tgDialog"), tgMusic=$("tgMusic"), btnMaster=$("btnMaster");
   const volDialog=$("volDialog"), volMusic=$("volMusic");
@@ -416,6 +418,8 @@
   let muted     = false;
   let dialogVol = DIALOG_DEF/100;
   let musicVol  = (MUSIC_DEF/100)*MUSIC_MAX;
+  let autoPlay  = false;         // modo "escuchar el cuento solo"
+  let autoTimer = null;          // espera entre el fin de una narración y el giro
 
   const flipMs = readMs("--flip-duration");
   function readMs(v){ const s=getComputedStyle(document.documentElement).getPropertyValue(v).trim();
@@ -486,11 +490,58 @@
     applyMusicVolume(false);                  // baja la música (ducking) al empezar la voz
   }
   narrator.addEventListener("playing", ()=> applyMusicVolume(false));
-  narrator.addEventListener("ended",   ()=>{ speaker.classList.remove("playing"); applyMusicVolume(false); });
+  narrator.addEventListener("ended",   ()=>{
+    speaker.classList.remove("playing");
+    applyMusicVolume(false);
+    // MODO AUTOMÁTICO: se avanza cuando la narración TERMINA de verdad (evento
+    // real del audio), nunca por cronómetro. Así no se puede desincronizar
+    // aunque una lámina dure mucho más que otra.
+    if(autoPlay){
+      if(current < LAST){
+        cancelAuto();
+        autoTimer = window.setTimeout(()=>{ if(autoPlay) goNext(); }, AUTO_GAP);
+      }else{
+        stopAuto();               // fin del cuento: se apaga solo
+      }
+    }
+  });
   narrator.addEventListener("pause",   ()=> applyMusicVolume(false));
 
   // Precarga (sin reproducir) la narración de la próxima lámina
   function prefetchNarration(page){ if(hasAudio(page)){ prefetch.src=audSrc(page); prefetch.load(); } }
+
+  /* ═══════════════ MODO AUTOMÁTICO ═══════════════
+     El niño escucha el cuento entero sin tocar nada. Encadena:
+     narración → pausa para mirar la ilustración → giro de hoja → narración. */
+  function cancelAuto(){ if(autoTimer){ clearTimeout(autoTimer); autoTimer=null; } }
+
+  function startAuto(){
+    autoPlay = true;
+    // Sin voz no hay nada que encadenar: el modo automático la activa.
+    if(muted){ muted=false; ensureMusic(); }
+    dialogOn = true;
+    syncToggles(); syncAutoBtn();
+    // Si la narración de esta lámina ya terminó, encadena; si no, la arranca.
+    if(narrator.paused || narrator.ended) playNarration(current);
+  }
+  function stopAuto(){
+    autoPlay = false;
+    cancelAuto();
+    syncAutoBtn();
+  }
+  function syncAutoBtn(){
+    btnAuto.classList.toggle("active", autoPlay);
+    btnAuto.textContent = autoPlay ? "⏸" : "▶";
+    btnAuto.title = autoPlay
+      ? "Reproducción automática activada — tocar para detener"
+      : "Escuchar el cuento solo (pasa las hojas automáticamente)";
+  }
+  btnAuto.addEventListener("click",(e)=>{
+    e.stopPropagation();
+    if(!started){ startAlbum(); startAuto(); blur(); return; }
+    if(autoPlay) stopAuto(); else startAuto();
+    blur();
+  });
 
   /* ═══════════════ RENDER ═══════════════ */
   function render(){
@@ -512,6 +563,7 @@
     if(target < 0 || target > LAST) return;
 
     animating = true;
+    cancelAuto();                    // anula un avance pendiente (evita saltos dobles)
     stopNarration();                 // corta el diálogo anterior antes de la transición
 
     imgUnder.src = imgSrc(target);
@@ -626,6 +678,7 @@
   // Toggles de canal
   tgDialog.addEventListener("click",(e)=>{ e.stopPropagation();
     dialogOn=!dialogOn; syncToggles();
+    if(!dialogOn && autoPlay) stopAuto();   // sin voz no hay cadena que seguir
     if(dialogOn){ playNarration(current); } else { stopNarration(); }
   });
   tgMusic.addEventListener("click",(e)=>{ e.stopPropagation();
@@ -633,6 +686,7 @@
   });
   btnMaster.addEventListener("click",(e)=>{ e.stopPropagation();
     muted=!muted; syncToggles();
+    if(muted && autoPlay) stopAuto();
     if(muted){ narrator.pause(); music.pause(); }
     else{ ensureMusic(); if(dialogOn) playNarration(current); }
   });
@@ -674,6 +728,7 @@
 
   /* ═══════════════ ARRANQUE ═══════════════ */
   syncToggles();
+  syncAutoBtn();
   render();
 
 })();
