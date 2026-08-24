@@ -1,0 +1,666 @@
+<!DOCTYPE html>
+<!--
+  ============================================================================
+  "EL CANTO SECRETO DE PIP" — álbum infantil interactivo (una sola página HTML)
+  ----------------------------------------------------------------------------
+  Autocontenido (HTML + CSS + JS). Funciona OFFLINE. Diseño MOBILE-FIRST.
+
+  ARCHIVOS EN ESTA CARPETA (no se renombran ni se tocan):
+    · Imágenes:  00.png (portada) … 12.png (13 láminas; 12 = cierre "Fin")
+    · Narración: 00.mp3 … 11.mp3   (una por lámina; la 12 NO tiene audio)
+    · Música:    music.mp3         (ambiente, en bucle, volumen bajo)
+
+  MAPEO ESTRICTO  lámina n  ->  n.mp3   (mismo nombre base = mismo contenido).
+    · Un ÚNICO elemento de audio para la narración => imposible que suenen
+      dos diálogos a la vez; y compatible con el autoplay de iOS/Android.
+    · La música baja sola (ducking suave) cuando habla un diálogo y sube al
+      terminar. Jerarquía de audio: 1) diálogo  2) música  3) roce de página.
+
+  ┌───────────────────────── AJUSTES RÁPIDOS ─────────────────────────┐
+  │  · Velocidad del flip ......... --flip-duration     (CSS :root)    │
+  │  · Color del marco / fondo .... --frame-*           (CSS :root)    │
+  │  · Redondeo de páginas ........ --page-radius       (CSS :root)    │
+  │  · Nº de láminas de historia .. STORY_PAGES         (JS)           │
+  │  · Volúmenes por defecto ...... DIALOG_DEF / MUSIC_DEF (JS)        │
+  │  · Ducking de la música ....... DUCK_RATIO          (JS)           │
+  └───────────────────────────────────────────────────────────────────┘
+  ============================================================================
+-->
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#D3BB90">
+<title>El Canto Secreto de Pip</title>
+
+<style>
+  :root{
+    /* ── Láminas (papel claro) ───────────────────────────────────────────── */
+    --paper:      #FDFBF6;
+    --ink:        #6E5F49;
+
+    /* ── Marco cálido que rodea al álbum (contrasta con las páginas) ──────── */
+    --frame-1:    #EFE3C8;   /* centro, cálido claro */
+    --frame-2:    #E3D0AC;   /* medio                */
+    --frame-3:    #CDB587;   /* bordes, más tostado  */
+
+    --accent:     #E9A6A1;   /* rosa acuarela        */
+    --accent-2:   #9CC0A9;   /* verde suave          */
+
+    /* ── Comportamiento ──────────────────────────────────────────────────── */
+    --flip-duration:  820ms;                 /* pasar la hoja (suave, natural) */
+    --flip-ease:      cubic-bezier(.24,.62,.36,1);
+    --page-radius:    16px;
+    --ui: "Segoe UI Rounded","Segoe UI",-apple-system,"SF Pro Rounded",
+          "Nunito","Quicksand",system-ui,sans-serif;
+
+    /* Tamaño del álbum: cuadrado, dominante, dejando aire para la barra */
+    --album: min(94vmin, 92vw, 84vh);
+  }
+
+  *{ box-sizing:border-box; margin:0; padding:0; }
+  html,body{ height:100%; }
+
+  body{
+    font-family:var(--ui);
+    color:var(--ink);
+    /* Marco cálido tipo papel / biblioteca infantil (no saturado) */
+    background:
+      repeating-linear-gradient(45deg, rgba(255,255,255,.035) 0 2px, transparent 2px 7px),
+      radial-gradient(150% 130% at 50% 8%, var(--frame-1) 0%, var(--frame-2) 46%, var(--frame-3) 100%);
+    display:flex; flex-direction:column; align-items:center; justify-content:center;
+    min-height:100%; min-height:100dvh; overflow:hidden;
+    -webkit-tap-highlight-color:transparent; user-select:none;
+    touch-action:manipulation;
+  }
+  /* Viñeta suave para reforzar la sensación de álbum */
+  body::before{
+    content:""; position:fixed; inset:0; pointer-events:none; z-index:0;
+    box-shadow:inset 0 0 22vmin rgba(90,68,38,.20);
+  }
+
+  /* ── Escenario cuadrado con perspectiva (para el giro de hoja) ──────────── */
+  #stage{
+    position:relative; z-index:1;
+    width:var(--album); height:var(--album);
+    perspective:2400px; perspective-origin:50% 50%;
+  }
+
+  /* ── El álbum (cuadrado, 1:1) ──────────────────────────────────────────── */
+  /* OJO: NADA de `filter` aquí. `filter` es una propiedad de agrupación que
+     APLANA el contexto 3D y anula `preserve-3d`, dejando el giro de hoja como
+     un simple aplastamiento horizontal. La sombra va en las páginas. */
+  #book{
+    position:absolute; inset:0; transform-style:preserve-3d;
+    border-radius:var(--page-radius);
+  }
+  /* Sombra del álbum, detrás de todo y fuera del contexto 3D */
+  #bookShadow{
+    position:absolute; inset:0; z-index:0; border-radius:var(--page-radius);
+    background:var(--paper);
+    box-shadow:0 22px 30px rgba(90,68,38,.30);
+  }
+
+  .page{
+    position:absolute; inset:0; border-radius:var(--page-radius);
+    background:var(--paper); overflow:hidden;
+    backface-visibility:hidden;
+    box-shadow:0 1px 4px rgba(90,68,38,.10) inset;
+  }
+  .page img{
+    width:100%; height:100%; object-fit:contain;   /* nunca deforma ni recorta */
+    display:block; background:var(--paper); pointer-events:none;
+  }
+  #pageCurrent{ z-index:1; }
+  /* CLAVE: la página auxiliar del giro va OCULTA salvo durante la animación.
+     Si queda visible, su fondo opaco tapa la lámina actual (pantalla en blanco). */
+  #pageUnder{   z-index:2; display:none; }
+
+  /* Aviso de láminas no cargadas (solo visible si falla la carga de imágenes) */
+  #imgFallback{
+    position:absolute; inset:0; display:none; z-index:3;
+    flex-direction:column; align-items:center; justify-content:center; gap:14px;
+    padding:8% 12%; text-align:center; line-height:1.55;
+    font-size:clamp(13px, 2.6vmin, 16px); color:var(--ink);
+    background:var(--paper); border-radius:var(--page-radius);
+  }
+  #imgFallback strong{ font-size:1.15em; }
+  #imgFallback em{ font-style:normal; font-weight:600; }
+  body.img-error #imgFallback{ display:flex; }
+
+  /* Sombra proyectada sobre la página de abajo mientras se pasa la hoja */
+  #turnShadow{
+    position:absolute; inset:0; z-index:4; border-radius:var(--page-radius);
+    background:linear-gradient(90deg, rgba(60,40,15,.20), rgba(60,40,15,0) 42%);
+    opacity:0; pointer-events:none;
+    transition:opacity var(--flip-duration) var(--flip-ease);
+  }
+
+  /* ── Hoja que gira: cara + reverso + sombra + curvatura ────────────────── */
+  #flipper{
+    position:absolute; inset:0; z-index:5; transform-style:preserve-3d;
+    transform-origin:left center;
+    transition:transform var(--flip-duration) var(--flip-ease);
+    display:none; will-change:transform;
+  }
+  #flipper .face{
+    position:absolute; inset:0; border-radius:var(--page-radius);
+    overflow:hidden; backface-visibility:hidden; background:var(--paper);
+  }
+  #flipper .front{ z-index:2; }
+  #flipper .back{
+    transform:rotateY(180deg);
+    background:linear-gradient(115deg, var(--paper) 0%, #F3E9D6 100%);
+  }
+  #flipper .face img{
+    width:100%; height:100%; object-fit:contain; display:block;
+    background:var(--paper); pointer-events:none;
+  }
+  #flipper .shade{
+    position:absolute; inset:0; border-radius:var(--page-radius);
+    background:linear-gradient(90deg, rgba(40,26,8,.26), rgba(40,26,8,0) 52%);
+    opacity:0; transition:opacity var(--flip-duration) var(--flip-ease);
+    pointer-events:none;
+  }
+  #flipper .curl{
+    position:absolute; inset:0; border-radius:var(--page-radius);
+    background:linear-gradient(90deg, rgba(255,255,255,0) 72%, rgba(255,255,255,.5) 100%);
+    opacity:0; transition:opacity calc(var(--flip-duration) * .55) var(--flip-ease);
+    pointer-events:none; mix-blend-mode:soft-light;
+  }
+
+  /* ── Zonas de toque (izq = atrás, der = adelante) ──────────────────────── */
+  .clickZone{ position:absolute; top:0; bottom:0; width:50%; z-index:8; cursor:pointer; }
+  #zoneBack{ left:0; } #zoneNext{ right:0; }
+
+  /* ── Flechas (área táctil generosa) ────────────────────────────────────── */
+  .arrow{
+    position:absolute; top:50%; transform:translateY(-50%); z-index:9;
+    width:56px; height:56px; border:none; border-radius:50%;
+    background:rgba(253,251,246,.86);
+    box-shadow:0 6px 16px rgba(90,68,38,.28);
+    color:var(--ink); font-size:26px; line-height:1;
+    display:flex; align-items:center; justify-content:center;
+    cursor:pointer; -webkit-backdrop-filter:blur(3px); backdrop-filter:blur(3px);
+    transition:transform .15s ease, opacity .25s ease, background .2s ease;
+  }
+  .arrow:hover{ transform:translateY(-50%) scale(1.07); background:#fff; }
+  .arrow:active{ transform:translateY(-50%) scale(.93); }
+  #arrowBack{ left:-16px; } #arrowNext{ right:-16px; }
+  .arrow[disabled]{ opacity:.26; cursor:default; pointer-events:none; }
+
+  /* ── Barra inferior ────────────────────────────────────────────────────── */
+  #bottombar{
+    position:fixed; left:0; right:0; bottom:calc(12px + env(safe-area-inset-bottom));
+    display:flex; align-items:center; justify-content:center; gap:14px;
+    z-index:20; font-size:15px;
+  }
+  #counter{
+    min-width:74px; text-align:center;
+    background:rgba(253,251,246,.85); padding:8px 14px; border-radius:999px;
+    box-shadow:0 4px 12px rgba(90,68,38,.18);
+    letter-spacing:.4px; font-variant-numeric:tabular-nums;
+  }
+  .ctrl{
+    width:46px; height:46px; border:none; border-radius:50%;
+    background:rgba(253,251,246,.85);
+    box-shadow:0 4px 12px rgba(90,68,38,.18);
+    color:var(--ink); cursor:pointer; font-size:19px;
+    display:flex; align-items:center; justify-content:center;
+    transition:transform .15s ease, background .2s ease;
+  }
+  .ctrl:hover{ transform:scale(1.07); background:#fff; }
+  .ctrl:active{ transform:scale(.93); }
+  .ctrl.active{ background:var(--accent); color:#fff; }
+
+  /* Altavoz por lámina (repetir su narración) — arriba a la derecha */
+  #speaker{
+    position:absolute; top:12px; right:12px; z-index:10;
+    width:48px; height:48px; border:none; border-radius:50%;
+    background:rgba(253,251,246,.9);
+    box-shadow:0 5px 14px rgba(90,68,38,.24);
+    color:var(--ink); cursor:pointer; font-size:22px;
+    display:none; align-items:center; justify-content:center;
+    transition:transform .15s ease, background .2s ease;
+  }
+  #speaker:hover{ transform:scale(1.07); background:#fff; }
+  #speaker.playing{ background:var(--accent); color:#fff; }
+
+  /* ── Panel de audio (popover) ──────────────────────────────────────────── */
+  #audioPanel{
+    position:fixed; left:50%; transform:translateX(-50%) translateY(10px);
+    bottom:calc(72px + env(safe-area-inset-bottom));
+    width:min(92vw, 330px); z-index:30;
+    background:rgba(253,251,246,.98);
+    border-radius:20px; padding:14px 16px;
+    box-shadow:0 14px 34px rgba(90,68,38,.30);
+    opacity:0; pointer-events:none;
+    transition:opacity .22s ease, transform .22s ease;
+  }
+  #audioPanel.open{ opacity:1; pointer-events:auto; transform:translateX(-50%) translateY(0); }
+  .arow{ display:flex; align-items:center; gap:12px; padding:8px 0; }
+  .arow + .arow{ border-top:1px solid rgba(120,95,60,.14); }
+  .atoggle{
+    flex:0 0 auto; width:44px; height:44px; border:none; border-radius:14px;
+    background:#F0E7D5; color:var(--ink); font-size:20px; cursor:pointer;
+    display:flex; align-items:center; justify-content:center;
+    transition:background .2s ease, transform .12s ease;
+  }
+  .atoggle:active{ transform:scale(.92); }
+  .atoggle.on{ background:var(--accent-2); color:#fff; }
+  .atoggle.dialog.on{ background:var(--accent); }
+  .arow .lab{ flex:0 0 52px; font-size:13px; opacity:.8; }
+  .arow input[type=range]{
+    flex:1 1 auto; height:30px; accent-color:var(--accent);
+    background:transparent; cursor:pointer;
+  }
+  #masterRow{ justify-content:center; gap:10px; }
+  #btnMaster{ width:auto; padding:10px 16px; border-radius:999px; font-size:14px; gap:8px; }
+
+  /* ── Puerta de inicio (portada + botón para habilitar sonido) ──────────── */
+  #startGate{
+    position:absolute; inset:0; z-index:40; border-radius:var(--page-radius);
+    display:flex; align-items:flex-end; justify-content:center;
+    /* Velo cálido muy leve para resaltar el botón sobre la portada */
+    background:linear-gradient(to top, rgba(60,42,18,.28), rgba(60,42,18,0) 45%);
+    cursor:pointer;
+  }
+  #startBtn{
+    margin-bottom:8%; border:none; cursor:pointer;
+    padding:14px 26px; border-radius:999px;
+    background:rgba(122,106,85,.95); color:#fff;
+    font-family:var(--ui); font-size:17px; font-weight:600; letter-spacing:.3px;
+    box-shadow:0 10px 24px rgba(60,42,18,.4);
+    animation:breathe 2.4s ease-in-out infinite;
+  }
+  #startBtn:hover{ background:#6a5c48; }
+  @keyframes breathe{
+    0%,100%{ transform:translateY(0);   } 50%{ transform:translateY(-6px); }
+  }
+  #startGate.gone{ display:none; }
+
+  /* ── Móvil: controles cómodos, láminas dominantes ─────────────────────── */
+  @media (max-width:560px){
+    :root{ --album: min(96vmin, 96vw, 78vh); }
+    .arrow{ width:50px; height:50px; font-size:23px; }
+    #arrowBack{ left:2px; } #arrowNext{ right:2px; }
+    #speaker{ width:46px; height:46px; font-size:20px; top:10px; right:10px; }
+  }
+  /* Landscape en móvil: reserva alto para la barra inferior (sin solapes) */
+  @media (max-height:520px){
+    :root{ --album: min(96vmin, 68vh, 94vw); }
+    #bottombar{ gap:10px; }
+    .ctrl{ width:42px; height:42px; }
+  }
+
+  @media (prefers-reduced-motion:reduce){
+    :root{ --flip-duration:1ms; }
+    #startBtn{ animation:none; }
+  }
+</style>
+
+<div id="stage">
+  <div id="book">
+    <!-- Sombra del álbum (fuera del contexto 3D, para no aplanar el giro) -->
+    <div id="bookShadow"></div>
+
+    <!-- src ya fijado en el HTML: NUNCA abre en blanco aunque el JS tarde -->
+    <div class="page" id="pageCurrent">
+      <img id="imgCurrent" src="00.png" alt="Lámina del cuento">
+      <!-- Aviso solo si el navegador no logra cargar las láminas (visor restringido) -->
+      <div id="imgFallback">
+        <p><strong>No se pudieron cargar las láminas</strong></p>
+        <p>Este visor no permite leer los archivos de la carpeta.<br>
+           Abre <em>index.html</em> con doble clic en Chrome o Edge,<br>
+           o usa el mini-servidor local.</p>
+      </div>
+    </div>
+    <div class="page" id="pageUnder"><img id="imgUnder" alt=""></div>
+
+    <div id="turnShadow"></div>
+
+    <div id="flipper">
+      <div class="face front"><img id="imgFront" alt=""></div>
+      <div class="face back"><img id="imgBack" alt=""></div>
+      <div class="shade"></div>
+      <div class="curl"></div>
+    </div>
+
+    <button id="speaker" title="Escuchar esta lámina" aria-label="Escuchar esta lámina">🔊</button>
+
+    <!-- Puerta de inicio: portada 00.png + botón (habilita el sonido) -->
+    <div id="startGate">
+      <button id="startBtn">▶  Abrir el cuento</button>
+    </div>
+
+    <div class="clickZone" id="zoneBack"></div>
+    <div class="clickZone" id="zoneNext"></div>
+  </div>
+
+  <button class="arrow" id="arrowBack" aria-label="Lámina anterior">‹</button>
+  <button class="arrow" id="arrowNext" aria-label="Lámina siguiente">›</button>
+</div>
+
+<!-- Barra inferior -->
+<div id="bottombar">
+  <button class="ctrl" id="btnAudio" title="Controles de sonido" aria-label="Controles de sonido">🎚️</button>
+  <div id="counter">Portada</div>
+  <button class="ctrl" id="btnFull" title="Pantalla completa" aria-label="Pantalla completa">⛶</button>
+</div>
+
+<!-- Panel de audio -->
+<div id="audioPanel" role="dialog" aria-label="Controles de sonido">
+  <div class="arow">
+    <button class="atoggle dialog on" id="tgDialog" title="Activar/silenciar narración" aria-label="Narración">🗣️</button>
+    <span class="lab">Diálogo</span>
+    <input type="range" id="volDialog" min="0" max="100" step="1" aria-label="Volumen de la narración">
+  </div>
+  <div class="arow">
+    <button class="atoggle music on" id="tgMusic" title="Activar/desactivar música" aria-label="Música">🎵</button>
+    <span class="lab">Música</span>
+    <input type="range" id="volMusic" min="0" max="100" step="1" aria-label="Volumen de la música">
+  </div>
+  <div class="arow" id="masterRow">
+    <button class="atoggle" id="btnMaster" title="Silenciar / restaurar todo">🔊 Silenciar todo</button>
+  </div>
+</div>
+
+<script>
+(function(){
+  "use strict";
+
+  /* ═══════════════ CONFIGURACIÓN ═══════════════ */
+  const STORY_PAGES = 12;        // láminas de historia: 01..12 (12.png = cierre sin audio)
+  const LAST        = STORY_PAGES; // índice de la última lámina (12); la 0 es la portada
+  const DIALOG_DEF  = 100;       // volumen diálogo por defecto (0..100)
+  const MUSIC_DEF   = 20;        // volumen música por defecto (0..100)  ~ambiente muy bajo
+  const MUSIC_MAX   = 0.42;      // tope real de la música (para que nunca tape la voz)
+  const DUCK_RATIO  = 0.30;      // durante un diálogo, la música baja a este % de su valor
+
+  const pad = n => String(n).padStart(2, "0");
+  const imgSrc = n => pad(n) + ".png";                 // 00.png .. 12.png
+  const audSrc = n => pad(n) + ".mp3";                 // 00.mp3 .. 12.mp3
+  const hasAudio = n => n >= 0 && n <= 12;             // todas las láminas tienen narración
+
+  /* ═══════════════ DOM ═══════════════ */
+  const $ = id => document.getElementById(id);
+  const imgCurrent=$("imgCurrent"), imgUnder=$("imgUnder"),
+        imgFront=$("imgFront"), imgBack=$("imgBack");
+  const flipper=$("flipper"), shade=flipper.querySelector(".shade"),
+        curl=flipper.querySelector(".curl"), turnShadow=$("turnShadow");
+  const pageUnder=$("pageUnder"), counter=$("counter"), speaker=$("speaker");
+  const arrowBack=$("arrowBack"), arrowNext=$("arrowNext"),
+        zoneBack=$("zoneBack"), zoneNext=$("zoneNext");
+  const btnFull=$("btnFull"), btnAudio=$("btnAudio"), audioPanel=$("audioPanel");
+  const startGate=$("startGate"), startBtn=$("startBtn");
+  const tgDialog=$("tgDialog"), tgMusic=$("tgMusic"), btnMaster=$("btnMaster");
+  const volDialog=$("volDialog"), volMusic=$("volMusic");
+
+  /* ═══════════════ ESTADO ═══════════════ */
+  let current   = 0;             // 0 = portada; 1..12 = historia
+  let animating = false;
+  let started   = false;         // ¿ya hubo interacción inicial? (autoplay desbloqueado)
+  let dialogOn  = true;
+  let musicOn   = true;
+  let muted     = false;
+  let dialogVol = DIALOG_DEF/100;
+  let musicVol  = (MUSIC_DEF/100)*MUSIC_MAX;
+
+  const flipMs = readMs("--flip-duration");
+  function readMs(v){ const s=getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+    return s.endsWith("ms")?parseFloat(s):parseFloat(s)*1000; }
+
+  /* ═══════════════ PRECARGA INTELIGENTE DE IMÁGENES ═══════════════ */
+  // No se cargan las 13 de golpe (pesan); solo la actual y sus vecinas.
+  const imgCache = {};
+  function preloadImg(n){ if(n<0||n>LAST||imgCache[n]) return; const im=new Image(); im.src=imgSrc(n); imgCache[n]=im; }
+  function preloadAround(n){ preloadImg(n); preloadImg(n+1); preloadImg(n-1); }
+  preloadAround(0); preloadImg(1);   // portada + primeras
+
+  /* ═══════════════ AUDIO ═══════════════
+     · UN solo elemento para la narración  => jamás dos diálogos a la vez, y
+       una vez desbloqueado por el primer gesto, puede reproducirse solo en
+       cada cambio de lámina (compatible con iOS/Android).
+     · Un elemento aparte solo para PRECARGAR la narración siguiente (no suena).
+     · La música es su propio elemento, en bucle. */
+  const narrator = new Audio();      // fuente única de diálogo
+  narrator.preload = "auto";
+  const prefetch = new Audio();      // calienta la caché de la próxima narración
+  prefetch.preload = "auto";
+  const music = new Audio("music.mp3");
+  music.loop = true; music.preload = "auto"; music.volume = musicVol;
+
+  let musicFadeTimer = null;
+  function fadeMusicTo(target, ms){
+    if(musicFadeTimer){ clearInterval(musicFadeTimer); musicFadeTimer=null; }
+    const start=music.volume, t0=performance.now();
+    musicFadeTimer=setInterval(()=>{
+      const k=Math.min(1,(performance.now()-t0)/ms);
+      music.volume=Math.max(0, start+(target-start)*k);
+      if(k>=1){ clearInterval(musicFadeTimer); musicFadeTimer=null; }
+    },30);
+  }
+  // Volumen "objetivo" de la música según estado y si hay diálogo sonando
+  function musicTarget(){
+    if(muted || !musicOn) return 0;
+    return narratorPlaying() ? Math.max(0.02, musicVol*DUCK_RATIO) : musicVol;
+  }
+  function applyMusicVolume(fast){ fadeMusicTo(musicTarget(), fast?120:500); }
+  function narratorPlaying(){ return !narrator.paused && !narrator.ended && narrator.currentTime>0; }
+
+  function ensureMusic(){
+    if(muted || !musicOn){ if(!music.paused) music.pause(); return; }
+    if(music.paused){ const p=music.play(); if(p&&p.catch) p.catch(()=>{}); }
+    applyMusicVolume(true);
+  }
+
+  // Detiene la narración actual (y devuelve la música a su nivel)
+  function stopNarration(){
+    if(!narrator.paused){ narrator.pause(); }
+    narrator.currentTime = 0;
+    speaker.classList.remove("playing");
+    applyMusicVolume(false);
+  }
+  // Reproduce la narración de la lámina indicada — SIEMPRE la que corresponde
+  function playNarration(page){
+    stopNarration();                          // corta cualquier diálogo previo (uno solo)
+    if(!started || muted || !dialogOn) return;
+    if(!hasAudio(page)) return;               // la lámina 12 no tiene voz
+    narrator.src = audSrc(page);              // mapeo estricto: page -> page.mp3
+    narrator.currentTime = 0;
+    narrator.volume = dialogVol;
+    const p = narrator.play();
+    if(p && p.catch) p.catch(()=>{ /* bloqueado: sonará tras el próximo gesto */ });
+    if(page === current) speaker.classList.add("playing");
+    applyMusicVolume(false);                  // baja la música (ducking) al empezar la voz
+  }
+  narrator.addEventListener("playing", ()=> applyMusicVolume(false));
+  narrator.addEventListener("ended",   ()=>{ speaker.classList.remove("playing"); applyMusicVolume(false); });
+  narrator.addEventListener("pause",   ()=> applyMusicVolume(false));
+
+  // Precarga (sin reproducir) la narración de la próxima lámina
+  function prefetchNarration(page){ if(hasAudio(page)){ prefetch.src=audSrc(page); prefetch.load(); } }
+
+  /* ═══════════════ RENDER ═══════════════ */
+  function render(){
+    imgCurrent.src = imgSrc(current);
+    counter.textContent = current === 0 ? "Portada" : (current + " / " + STORY_PAGES);
+    arrowBack.disabled = current === 0;
+    arrowNext.disabled = current === LAST;
+    zoneBack.style.cursor = current === 0    ? "default" : "pointer";
+    zoneNext.style.cursor = current === LAST ? "default" : "pointer";
+    // Altavoz solo si hay narración en esta lámina y ya se inició
+    speaker.style.display = (started && hasAudio(current)) ? "flex" : "none";
+    preloadAround(current);
+    prefetchNarration(current + 1);
+  }
+
+  /* ═══════════════ PASAR HOJA (transición de papel físico) ═══════════════ */
+  function turn(target, dir){
+    if(animating || !started) return;
+    if(target < 0 || target > LAST) return;
+
+    animating = true;
+    stopNarration();                 // corta el diálogo anterior antes de la transición
+
+    imgUnder.src = imgSrc(target);
+    pageUnder.style.display = "block";
+    imgFront.src = (dir === "next") ? imgSrc(current) : imgSrc(target);
+    imgBack.src  = "";
+
+    flipper.style.transition = "none";
+    shade.style.transition = curl.style.transition = turnShadow.style.transition = "none";
+    flipper.style.transform  = (dir==="next") ? "rotateY(0deg)" : "rotateY(-180deg)";
+    shade.style.opacity      = (dir==="next") ? "0" : "0.9";
+    curl.style.opacity       = "0";
+    turnShadow.style.opacity = (dir==="next") ? "0" : "0.28";
+    flipper.style.display    = "block";
+    void flipper.offsetWidth;        // reflow
+
+    flipper.style.transition = "transform var(--flip-duration) var(--flip-ease)";
+    shade.style.transition = turnShadow.style.transition = "opacity var(--flip-duration) var(--flip-ease)";
+    curl.style.transition  = "opacity calc(var(--flip-duration) * .55) var(--flip-ease)";
+    requestAnimationFrame(()=>{
+      flipper.style.transform  = (dir==="next") ? "rotateY(-180deg)" : "rotateY(0deg)";
+      shade.style.opacity      = (dir==="next") ? "0.9" : "0";
+      curl.style.opacity       = "1";
+      turnShadow.style.opacity = (dir==="next") ? "0.28" : "0";
+    });
+    window.setTimeout(()=>{ curl.style.opacity="0"; }, flipMs*0.5);
+
+    window.setTimeout(()=>{
+      current = target;
+      render();
+      flipper.style.display="none";
+      pageUnder.style.display="none";
+      turnShadow.style.opacity="0";
+      animating=false;
+      playNarration(current);        // AUDIO AUTOMÁTICO de la lámina ya visible
+    }, flipMs + 30);
+  }
+  function goNext(){ if(started && !animating && current < LAST) turn(current+1,"next"); }
+  function goBack(){ if(started && !animating && current > 0)    turn(current-1,"prev"); }
+
+  /* ═══════════════ INICIO (desbloqueo de audio con el primer gesto) ═══════════════ */
+  function startAlbum(){
+    if(started) return;
+    started = true;
+    // El gesto está activo: desbloqueamos narración y música reproduciéndolas ahora.
+    startGate.classList.add("gone");
+    if(musicOn && !muted){ music.volume=0; const p=music.play(); if(p&&p.catch) p.catch(()=>{}); applyMusicVolume(false); }
+    render();
+    playNarration(0);                // narración de la portada (00.mp3)
+  }
+  startBtn.addEventListener("click",(e)=>{ e.stopPropagation(); startAlbum(); });
+  startGate.addEventListener("click", startAlbum);
+
+  /* ═══════════════ NAVEGACIÓN ═══════════════ */
+  arrowNext.addEventListener("click",(e)=>{ e.stopPropagation(); goNext(); blur(); });
+  arrowBack.addEventListener("click",(e)=>{ e.stopPropagation(); goBack(); blur(); });
+  zoneNext.addEventListener("click", ()=>{ if(started) goNext(); });
+  zoneBack.addEventListener("click", ()=>{ if(started) goBack(); });
+
+  document.addEventListener("keydown",(e)=>{
+    if(!started){
+      if(e.key==="Enter"||e.key===" "||e.key==="Spacebar"){ e.preventDefault(); startAlbum(); }
+      return;
+    }
+    if(e.key==="ArrowRight"||e.key===" "||e.key==="Spacebar"){ e.preventDefault(); goNext(); }
+    else if(e.key==="ArrowLeft"){ e.preventDefault(); goBack(); }
+    else if(e.key==="f"||e.key==="F"){ toggleFull(); }
+  });
+
+  // Swipe táctil (con umbral, para no cambiar de lámina por un toque accidental)
+  let tx=null, ty=null, tmoved=false;
+  const SWIPE_MIN=50;
+  const stage=$("stage");
+  stage.addEventListener("touchstart",(e)=>{ const t=e.changedTouches[0]; tx=t.clientX; ty=t.clientY; tmoved=false; },{passive:true});
+  stage.addEventListener("touchmove",(e)=>{ const t=e.changedTouches[0];
+    if(Math.abs(t.clientX-tx)>10||Math.abs(t.clientY-ty)>10) tmoved=true; },{passive:true});
+  stage.addEventListener("touchend",(e)=>{
+    if(tx===null||!started){ tx=ty=null; return; }
+    const t=e.changedTouches[0], dx=t.clientX-tx, dy=t.clientY-ty;
+    if(Math.abs(dx)>SWIPE_MIN && Math.abs(dx)>Math.abs(dy)*1.4){ if(dx<0) goNext(); else goBack(); }
+    tx=ty=null;
+  },{passive:true});
+
+  function blur(){ if(document.activeElement && document.activeElement.blur) document.activeElement.blur(); }
+
+  /* ═══════════════ CONTROLES DE AUDIO ═══════════════ */
+  // Panel abrir/cerrar
+  btnAudio.addEventListener("click",(e)=>{ e.stopPropagation();
+    audioPanel.classList.toggle("open");
+    btnAudio.classList.toggle("active", audioPanel.classList.contains("open"));
+  });
+  document.addEventListener("click",(e)=>{
+    if(audioPanel.classList.contains("open") && !audioPanel.contains(e.target) && e.target!==btnAudio){
+      audioPanel.classList.remove("open"); btnAudio.classList.remove("active");
+    }
+  });
+
+  // Sliders (volúmenes independientes)
+  volDialog.value = DIALOG_DEF; volMusic.value = MUSIC_DEF;
+  volDialog.addEventListener("input", ()=>{
+    dialogVol = (+volDialog.value)/100;
+    if(narratorPlaying()) narrator.volume = dialogVol;
+    if(dialogVol>0 && !dialogOn){ dialogOn=true; syncToggles(); }
+  });
+  volMusic.addEventListener("input", ()=>{
+    musicVol = ((+volMusic.value)/100)*MUSIC_MAX;
+    if(musicVol>0 && !musicOn){ musicOn=true; ensureMusic(); }
+    applyMusicVolume(true);
+  });
+
+  // Toggles de canal
+  tgDialog.addEventListener("click",(e)=>{ e.stopPropagation();
+    dialogOn=!dialogOn; syncToggles();
+    if(dialogOn){ playNarration(current); } else { stopNarration(); }
+  });
+  tgMusic.addEventListener("click",(e)=>{ e.stopPropagation();
+    musicOn=!musicOn; syncToggles(); ensureMusic();
+  });
+  btnMaster.addEventListener("click",(e)=>{ e.stopPropagation();
+    muted=!muted; syncToggles();
+    if(muted){ narrator.pause(); music.pause(); }
+    else{ ensureMusic(); if(dialogOn) playNarration(current); }
+  });
+
+  function syncToggles(){
+    tgDialog.classList.toggle("on", dialogOn && !muted);
+    tgMusic.classList.toggle("on",  musicOn  && !muted);
+    btnMaster.classList.toggle("on", muted);
+    btnMaster.textContent = muted ? "🔇 Silenciado" : "🔊 Silenciar todo";
+  }
+
+  // Altavoz por lámina: repetir / detener su narración
+  speaker.addEventListener("click",(e)=>{ e.stopPropagation();
+    if(!hasAudio(current)) return;
+    if(narrator.paused){ if(muted){ muted=false; syncToggles(); ensureMusic(); } dialogOn=true; syncToggles(); playNarration(current); }
+    else{ stopNarration(); }
+    blur();
+  });
+
+  /* ═══════════════ PANTALLA COMPLETA ═══════════════ */
+  function toggleFull(){
+    const el=document.documentElement;
+    if(!document.fullscreenElement){ (el.requestFullscreen||el.webkitRequestFullscreen||function(){}).call(el); }
+    else{ (document.exitFullscreen||document.webkitExitFullscreen||function(){}).call(document); }
+  }
+  btnFull.addEventListener("click",(e)=>{ e.stopPropagation(); toggleFull(); blur(); });
+
+  /* ═══════════════ DIAGNÓSTICO DE CARGA DE LÁMINAS ═══════════════ */
+  // Si el visor no puede leer los .png de la carpeta, se muestra un aviso
+  // claro en vez de una página en blanco sin explicación.
+  imgCurrent.addEventListener("error", ()=> document.body.classList.add("img-error"));
+  imgCurrent.addEventListener("load",  ()=> document.body.classList.remove("img-error"));
+  // Comprobación inicial (por si la imagen ya falló antes de registrar el listener)
+  window.setTimeout(()=>{
+    if(!imgCurrent.complete || imgCurrent.naturalWidth === 0){
+      document.body.classList.add("img-error");
+    }
+  }, 1200);
+
+  /* ═══════════════ ARRANQUE ═══════════════ */
+  syncToggles();
+  render();
+
+})();
+</script>
