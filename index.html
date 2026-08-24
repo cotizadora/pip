@@ -47,9 +47,11 @@
 
     /* ── Comportamiento ──────────────────────────────────────────────────── */
     /* Giro de hoja: lento y blando, como papel real que se dobla sin prisa.
-       Subir el tiempo = más suave. La curva arranca y termina muy despacio. */
-    --flip-duration:  1250ms;
-    --flip-ease:      cubic-bezier(.42,.02,.28,1);
+       OJO con la curva: el primer valor debe ser MENOR que el tercero
+       (.35 < .65). Si se cruzan, la hoja pega un acelerón seco en la mitad
+       y se siente rígida por mucho que se alargue la duración. */
+    --flip-duration:  1800ms;
+    --flip-ease:      cubic-bezier(.35,.05,.65,1);
     --page-radius:    16px;
     --ui: "Segoe UI Rounded","Segoe UI",-apple-system,"SF Pro Rounded",
           "Nunito","Quicksand",system-ui,sans-serif;
@@ -513,9 +515,9 @@
     shade.style.transition = curl.style.transition = turnShadow.style.transition = "none";
     flipper.style.transform  = (dir==="next") ? "rotateY(0deg)" : "rotateY(-180deg)";
     // Sombras suaves: valores bajos para que el giro se sienta de papel, no duro
-    shade.style.opacity      = (dir==="next") ? "0" : "0.45";
+    shade.style.opacity      = (dir==="next") ? "0" : "0.32";
     curl.style.opacity       = "0";
-    turnShadow.style.opacity = (dir==="next") ? "0" : "0.14";
+    turnShadow.style.opacity = (dir==="next") ? "0" : "0.10";
     flipper.style.display    = "block";
     void flipper.offsetWidth;        // reflow
 
@@ -524,9 +526,9 @@
     curl.style.transition  = "opacity calc(var(--flip-duration) * .55) var(--flip-ease)";
     requestAnimationFrame(()=>{
       flipper.style.transform  = (dir==="next") ? "rotateY(-180deg)" : "rotateY(0deg)";
-      shade.style.opacity      = (dir==="next") ? "0.45" : "0";
-      curl.style.opacity       = "0.5";
-      turnShadow.style.opacity = (dir==="next") ? "0.14" : "0";
+      shade.style.opacity      = (dir==="next") ? "0.32" : "0";
+      curl.style.opacity       = "0.35";
+      turnShadow.style.opacity = (dir==="next") ? "0.10" : "0";
     });
     window.setTimeout(()=>{ curl.style.opacity="0"; }, flipMs*0.5);
 
